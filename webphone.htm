@@ -2,143 +2,142 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Weekday Webphone (Plivo SDK) - PoC</title>
+  <title>Plivo Webphone — debug build</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body{font-family: Arial, Helvetica, sans-serif; padding:20px;}
-    #status{margin-bottom:10px;color:#333;}
-    .hidden{display:none;}
-    .big{font-size:18px;padding:12px;}
-    button{padding:10px 14px;font-size:16px;}
-    #log{margin-top:12px;white-space:pre-wrap;background:#f7f7f7;padding:10px;border-radius:6px; height:180px; overflow:auto;}
+    body{font-family:Arial,Helvetica,sans-serif;margin:20px;color:#222}
+    #status{padding:10px;border-radius:6px;background:#f2f2f2;margin-bottom:12px}
+    #diag{white-space:pre-wrap;background:#111;color:#d0f0d0;padding:12px;border-radius:6px;height:220px;overflow:auto}
+    #loginBox,.callBox{margin-bottom:12px}
+    input{padding:6px;margin:4px 0;width:320px}
+    button{padding:8px 12px;margin-right:6px}
+    .hidden{display:none}
   </style>
 </head>
 <body>
-  <h2>Weekday Webphone — PoC</h2>
-  <div id="status">initializing...</div>
+  <h3>Plivo Webphone — Debug</h3>
+  <div id="status">status: initial</div>
 
   <div id="loginBox">
     <label>Username: <input id="username" /></label><br/>
-    <label>Password: <input id="password" type="password" /></label><br/><br/>
+    <label>Password: <input id="password" type="password" /></label><br/>
     <button id="btnLogin">Login</button>
   </div>
 
   <div id="callBox" class="hidden">
-    <div>To: <input id="toInput" /></div><br/>
-    <div>Caller ID: <input id="callerIdInput" /></div><br/>
-    <button id="btnCall">Call</button>
-    <button id="btnHangup">Hangup</button>
+    <div>To: <input id="toInput" /></div>
+    <div>Caller ID: <input id="callerIdInput" /></div>
+    <br/>
+    <button id="btnCall">Call</button><button id="btnHangup">Hangup</button>
     <div id="callInfo"></div>
   </div>
 
-  <div id="log">console log...</div>
+  <h4>Diagnostics (visible)</h4>
+  <div id="diag">loading diagnostics...</div>
 
-  <!-- Plivo Browser SDK -->
-  <script src="https://cdn.plivo.com/sdk/browser/v2/plivo.min.js"></script>
-
+  <!-- Try primary CDN, with a fallback to jsDelivr -->
   <script>
-    // ---- small helpers
-    function qsel(id){return document.getElementById(id);}
-    function log(msg){ qsel('log').textContent = new Date().toLocaleTimeString() + ' • ' + msg + '\n' + qsel('log').textContent; }
-    function getParam(k){ const url = new URL(window.location.href); return url.searchParams.get(k); }
+    // small helper to write diagnostics to the page
+    function diag(s){
+      const el = document.getElementById('diag');
+      el.textContent = (new Date().toLocaleTimeString()) + ' • ' + s + '\n' + el.textContent;
+      console.log(s);
+    }
+    document.getElementById('status').innerText = 'status: loading Plivo SDK...';
 
-    // ---- parse incoming query params
-    const autoUser = getParam('username');
-    const autoPass = getParam('password');
-    const autoTo   = getParam('to');
-    const autoCallerId = getParam('callerid');
+    // dynamically inject primary CDN, then fallback
+    function loadScript(url, onload, onerror){
+      const s = document.createElement('script');
+      s.src = url;
+      s.onload = onload;
+      s.onerror = onerror;
+      document.head.appendChild(s);
+    }
 
-    // ---- Plivo SDK object
-    let plivoBrowserSdk = null;
+    // Attempt primary CDN then fallback to jsDelivr
+    loadScript('https://cdn.plivo.com/sdk/browser/v2/plivo.min.js', 
+      ()=>{ diag('Loaded Plivo SDK from CDN (cdn.plivo.com)'); startApp(); },
+      ()=>{ diag('Primary CDN failed, trying jsDelivr fallback...'); 
+            loadScript('https://cdn.jsdelivr.net/npm/plivo-browser-sdk@2.2.19/dist/plivo.min.js',
+              ()=>{ diag('Loaded Plivo SDK from jsDelivr'); startApp(); },
+              ()=>{ diag('Both CDN loads failed. Check console / network.'); document.getElementById('status').innerText='ERROR: SDK load failed'; }
+            );
+      }
+    );
 
+    // startApp will run only if plivo SDK is present
+    function startApp(){
+      document.getElementById('status').innerText = 'status: initializing SDK';
+      try{
+        if(!window.Plivo){ diag('window.Plivo not available after load.'); return; }
+        diag('window.Plivo detected: version (object) present');
+        initPhone();
+      } catch(e){
+        diag('Exception during startApp: ' + e.toString());
+        console.error(e);
+      }
+    }
+
+    // small wrapper of the original init logic
     function initPhone(){
-      // options can be extended if you want; empty is fine for PoC
+      diag('initPhone() running');
       const options = {};
-      plivoBrowserSdk = new window.Plivo(options);
+      try{
+        window.plivoBrowserSdk = new window.Plivo(options);
+      } catch(e){
+        diag('Failed to construct Plivo SDK object: ' + e.toString());
+        document.getElementById('status').innerText='ERROR: SDK init failed';
+        return;
+      }
+      const client = window.plivoBrowserSdk.client;
+      diag('SDK client object created');
 
-      // register listeners (subset)
-      const client = plivoBrowserSdk.client;
-      client.on('onWebrtcNotSupported', ()=>{ qsel('status').innerText='WebRTC not supported'; log('WebRTC not supported'); });
-      client.on('onLogin', onLogin);
-      client.on('onLoginFailed', (r)=>{ qsel('status').innerText='Login failed: '+JSON.stringify(r); log('Login failed '+JSON.stringify(r)); showLogin(); });
-      client.on('onLogout', ()=>{ qsel('status').innerText='Logged out'; showLogin(); });
-      client.on('onCalling', ()=>{ qsel('status').innerText='Calling...'; log('Calling...'); });
-      client.on('onCallRemoteRinging', ()=>{ qsel('status').innerText='Ringing...'; log('Remote ringing'); });
-      client.on('onCallAnswered', ()=>{ qsel('status').innerText='Call answered'; log('Call answered'); });
-      client.on('onCallTerminated', ()=>{ qsel('status').innerText='Call ended'; log('Call ended'); });
+      client.on('onWebrtcNotSupported', ()=>{ diag('event: WebRTC not supported'); document.getElementById('status').innerText='WebRTC not supported'; });
+      client.on('onLogin', ()=>{ diag('event: onLogin'); document.getElementById('status').innerText='Logged in'; showCallBox(); });
+      client.on('onLoginFailed', (r)=>{ diag('event: onLoginFailed '+JSON.stringify(r)); document.getElementById('status').innerText='Login failed'; showLogin(); });
+      client.on('onCalling', ()=>{ diag('event: onCalling'); document.getElementById('status').innerText='Calling...'; });
+      client.on('onCallRemoteRinging', ()=>{ diag('event: onCallRemoteRinging'); });
+      client.on('onCallAnswered', ()=>{ diag('event: onCallAnswered'); });
+      client.on('onCallTerminated', ()=>{ diag('event: onCallTerminated'); document.getElementById('status').innerText='Call ended'; });
 
-      log('Plivo SDK initialized');
-    }
+      document.getElementById('btnLogin').onclick = function(){
+        const u = document.getElementById('username').value.trim();
+        const p = document.getElementById('password').value.trim();
+        diag('Attempt login for '+u);
+        client.login(u, p);
+      };
+      document.getElementById('btnCall').onclick = function(){
+        const to = document.getElementById('toInput').value.trim();
+        const caller = document.getElementById('callerIdInput').value.trim();
+        diag('Attempting call to '+to+' with callerid='+caller);
+        client.call(to, caller ? {'X-PH-callerId': caller} : {});
+      };
+      document.getElementById('btnHangup').onclick = function(){ try{ client.hangup(); diag('hangup called'); }catch(e){ diag('hangup error '+e); } };
 
-    // UI helpers
-    function showLogin(){ qsel('loginBox').classList.remove('hidden'); qsel('callBox').classList.add('hidden'); }
-    function showCallBox(){ qsel('loginBox').classList.add('hidden'); qsel('callBox').classList.remove('hidden'); }
+      // handle auto params
+      const qp = new URL(window.location.href).searchParams;
+      const qUser = qp.get('username');
+      const qPass = qp.get('password');
+      const qTo   = qp.get('to');
+      const qCaller = qp.get('callerid');
+      if(qUser) document.getElementById('username').value = qUser;
+      if(qPass) document.getElementById('password').value = qPass;
+      if(qTo) document.getElementById('toInput').value = qTo;
+      if(qCaller) document.getElementById('callerIdInput').value = qCaller;
 
-    // login & call
-    function doLogin(username, password){
-      if(!username || !password){ alert('username/password required'); return; }
-      qsel('username').value = username;
-      qsel('password').value = password;
-      log('Attempting login for '+username);
-      plivoBrowserSdk.client.login(username, password);
-    }
+      document.getElementById('status').innerText = 'status: SDK ready. Login to proceed.';
+      diag('initPhone done: SDK ready.');
+      showLogin();
 
-    function onLogin(){
-      log('Logged in');
-      showCallBox();
-      if(autoTo){
-        // fill fields
-        qsel('toInput').value = autoTo;
-        if(autoCallerId) qsel('callerIdInput').value = autoCallerId;
-        // auto-call after a short pause to let UI show
-        setTimeout(()=>{ startCall(autoTo, autoCallerId); }, 400);
+      // For debug: auto login if creds present
+      if(qUser && qPass){
+        diag('Auto login credentials present — auto login triggered (debug mode).');
+        setTimeout(()=>{ client.login(qUser, qPass); }, 300);
       }
     }
 
-    function startCall(toNumber, callerId){
-      if(!toNumber){ alert('no destination number'); return; }
-      qsel('callInfo').innerText = 'Calling ' + toNumber;
-      // pass callerid as extra header that server side (if using XML/PHLO) can pick up.
-      const extraHeaders = callerId ? { 'X-PH-callerId': callerId } : {};
-      plivoBrowserSdk.client.call(toNumber, extraHeaders);
-      log('client.call('+toNumber+')');
-    }
-
-    function hangup(){
-      if(plivoBrowserSdk && plivoBrowserSdk.client && plivoBrowserSdk.client.callSession){
-        plivoBrowserSdk.client.hangup();
-      }
-    }
-
-    // wiring the buttons
-    document.addEventListener('DOMContentLoaded', ()=>{
-      initPhone();
-
-      qsel('btnLogin').addEventListener('click', ()=>{
-        const u = qsel('username').value.trim();
-        const p = qsel('password').value.trim();
-        doLogin(u, p);
-      });
-
-      qsel('btnCall').addEventListener('click', ()=>{
-        const to = qsel('toInput').value.trim();
-        const cid = qsel('callerIdInput').value.trim();
-        startCall(to, cid);
-      });
-
-      qsel('btnHangup').addEventListener('click', hangup);
-
-      // If auto credentials supplied via URL, auto login
-      if(autoUser && autoPass){
-        // fill fields for user visibility
-        qsel('username').value = autoUser;
-        qsel('password').value = autoPass;
-        // do auto login
-        setTimeout(()=>{ doLogin(autoUser, autoPass); }, 250);
-      } else {
-        showLogin();
-      }
-    });
+    function showLogin(){ document.getElementById('loginBox').classList.remove('hidden'); document.getElementById('callBox').classList.add('hidden'); }
+    function showCallBox(){ document.getElementById('loginBox').classList.add('hidden'); document.getElementById('callBox').classList.remove('hidden'); }
   </script>
 </body>
 </html>
